@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 채팅방 내부 검색
 // @namespace    https://github.com/mynameislovesong
-// @version      2.0.2
+// @version      2.0.3
 // @description  현재 채팅방의 전체 대화를 검색하고, 결과나 북마크를 누르면 원래 채팅창의 해당 메시지로 이동합니다. 과거 로그 범위 불러오기와 화면 본문 검색도 그대로 제공합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_addStyle
@@ -957,7 +957,9 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
   align-self: center;
   width: 28px;
   height: 28px;
-  margin: 0 8px 0 auto;
+  margin-top: 0;
+  margin-right: 0;
+  margin-bottom: 0;
   padding: 0;
   border-radius: 50%;
   box-shadow: none;
@@ -4424,6 +4426,7 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
   let launcherButton;
   let launcherObserver = null;
   let launcherPlacementFrame = null;
+  let launcherSettleTimers = [];
 
   let activeJob = 0;
   let loadingHistory = false;
@@ -4703,20 +4706,6 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
     return rect.width >= 8 && rect.height >= 8;
   }
 
-  function getButtonLabel(button) {
-    return [
-      button.getAttribute("aria-label"),
-      button.getAttribute("title"),
-      button.getAttribute("data-testid"),
-      button.getAttribute("data-name"),
-      button.textContent
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .trim()
-      .toLocaleLowerCase("ko-KR");
-  }
-
   function findComposerEditable() {
     const candidates = [
       ...document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]')
@@ -4752,127 +4741,44 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
     return null;
   }
 
-  function findSendButton() {
-    const editable = findComposerEditable();
-    const container = findComposerContainer(editable) || document;
-
-    const containerRect =
-      container === document ? null : container.getBoundingClientRect();
-
-    if (container !== document) {
-      const actionRows = [
-        ...container.querySelectorAll(".flex.items-center.justify-between")
-      ].filter(isVisibleElement);
-
-      for (const actionRow of actionRows) {
-        const hasLeftToolbar = [...actionRow.children].some((child) =>
-          child.matches(".flex.items-center.space-x-2")
-        );
-
-        if (!hasLeftToolbar) continue;
-
-        const directButtons = [...actionRow.children]
-          .filter((child) => child !== launcherButton)
-          .filter((child) => child.matches("button"))
-          .filter(isVisibleElement);
-
-        const primaryButton = directButtons.find(
-          (button) =>
-            button.classList.contains("bg-primary") &&
-            button.classList.contains("rounded-full")
-        );
-
-        if (primaryButton) return primaryButton;
-
-        if (directButtons.length) {
-          return directButtons[directButtons.length - 1];
-        }
-      }
-    }
-
-    const candidates = [
-      ...container.querySelectorAll(
-        'button, [role="button"], input[type="button"], input[type="submit"]'
-      )
-    ]
-      .filter((button) => button !== launcherButton)
-      .filter((button) => !isOwnElement(button))
-      .filter(isVisibleElement)
-      .map((button) => {
-        const rect = button.getBoundingClientRect();
-        const label = getButtonLabel(button);
-
-        let score = 0;
-
-        if (/전송|보내기|메시지\s*전송|send/.test(label)) score += 100;
-        if (button.matches('button[type="submit"], input[type="submit"]')) score += 35;
-        if (rect.bottom > window.innerHeight * 0.72) score += 15;
-        if (rect.left > window.innerWidth * 0.55) score += 10;
-
-        if (containerRect) {
-          const distanceFromRight = containerRect.right - rect.right;
-          const distanceFromBottom = containerRect.bottom - rect.bottom;
-
-          if (distanceFromRight >= -8 && distanceFromRight <= 96) score += 30;
-          if (distanceFromBottom >= -8 && distanceFromBottom <= 96) score += 30;
-        }
-
-        if (editable) {
-          const editableRect = editable.getBoundingClientRect();
-          const centerY = rect.top + rect.height / 2;
-          const editableCenterY = editableRect.top + editableRect.height / 2;
-
-          if (Math.abs(centerY - editableCenterY) < 60) score += 20;
-        }
-
-        return { button, rect, score };
-      })
-      .filter(({ rect }) => rect.width <= 96 && rect.height <= 96)
-      .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        return b.rect.right - a.rect.right;
-      });
-
-    return candidates[0]?.button || null;
-  }
-
-  function findLauncherSlot(sendButton) {
-    const container = sendButton.parentElement;
+  // 입력창 아래 줄 왼쪽의 Crack 도구 모음(이미지 첨부 등). 전송 버튼 쪽 줄은
+  // 다른 스크립트(MuseWriter·WRMC 등)가 "전송 버튼 바로 앞" 자리를 두고 계속
+  // 재배치하므로 끼어들지 않음
+  function findComposerToolbar() {
+    const container = findComposerContainer(findComposerEditable());
     if (!container) return null;
 
-    const siblings = [...container.children].filter(
-      (element) => element !== launcherButton
-    );
+    for (const row of container.querySelectorAll(".flex.items-center.justify-between")) {
+      const toolbar = [...row.children].find(
+        (child) =>
+          child !== launcherButton &&
+          child.matches(".flex.items-center.space-x-2") &&
+          isVisibleElement(child)
+      );
 
-    const sendIndex = siblings.indexOf(sendButton);
-    let anchor = sendButton;
-
-    for (let index = sendIndex - 1; index >= 0; index -= 1) {
-      const element = siblings[index];
-      const rect = element.getBoundingClientRect();
-
-      const isButtonLike =
-        element.matches('button, [role="button"], input[type="button"], input[type="submit"]') ||
-        Boolean(
-          element.querySelector('button, [role="button"], input[type="button"], input[type="submit"]')
-        );
-
-      if (!isButtonLike || !isVisibleElement(element) || rect.width > 72 || rect.height > 72) {
-        break;
-      }
-
-      anchor = element;
+      if (toolbar) return toolbar;
     }
 
-    return { container, anchor };
+    return null;
   }
 
-  function placeLauncherBesideSendButton() {
+  function isLauncherPlaced() {
+    return Boolean(
+      launcherButton?.isConnected &&
+      !launcherButton.classList.contains("ccs2-launcher-fallback") &&
+      launcherButton.parentElement?.matches(".flex.items-center.space-x-2")
+    );
+  }
+
+  function placeLauncher() {
     if (!launcherButton || launcherButton.hidden) return;
 
-    const sendButton = findSendButton();
+    // 한 번 도구 모음에 들어가면 다시 옮기지 않음 (다른 스크립트와 자리를 다투지 않음)
+    if (isLauncherPlaced()) return;
 
-    if (!sendButton) {
+    const toolbar = findComposerToolbar();
+
+    if (!toolbar) {
       if (launcherButton.parentElement !== document.documentElement) {
         document.documentElement.appendChild(launcherButton);
       }
@@ -4881,82 +4787,45 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
       return;
     }
 
-    const slot = findLauncherSlot(sendButton);
-    if (!slot) return;
-
     launcherButton.classList.remove("ccs2-launcher-fallback");
-
-    const slotStyle = getComputedStyle(slot.container);
-    const slotGap = Number.parseFloat(slotStyle.columnGap || slotStyle.gap) || 0;
-
-    launcherButton.style.marginRight = slotGap > 0 ? "0px" : "8px";
-
-    const alreadyBeforeSend =
-      launcherButton.parentElement === slot.container &&
-      Boolean(
-        launcherButton.compareDocumentPosition(sendButton) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-      );
-
-    // 이미 전송 버튼 쪽에 붙어 있으면 다시 옮기지 않음 (관찰자 반복 방지)
-    if (alreadyBeforeSend && isLauncherSnug()) return;
-
-    launcherButton.style.marginLeft = "";
-    slot.container.insertBefore(launcherButton, slot.anchor);
-    snugLauncher(sendButton);
+    toolbar.appendChild(launcherButton);
+    scheduleLauncherSettle();
   }
 
-  function nextVisibleSibling(element) {
-    let next = element.nextElementSibling;
-
-    while (next && next.getBoundingClientRect().width === 0) {
-      next = next.nextElementSibling;
+  function hasVisibleSiblingAfter(element) {
+    for (let next = element.nextElementSibling; next; next = next.nextElementSibling) {
+      if (next.getBoundingClientRect().width > 0) return true;
     }
 
-    return next;
+    return false;
   }
 
-  function isLauncherSnug() {
-    const next = nextVisibleSibling(launcherButton);
-    if (!next) return true;
+  // 다른 스크립트가 늦게 아이콘을 뒤에 붙이는 경우를 위해 두 번만 맨 뒤로 다시 옮기고,
+  // 그 뒤로는 움직이지 않음 (맨 뒤를 고집하는 스크립트와 계속 다투지 않도록)
+  function scheduleLauncherSettle() {
+    for (const timer of launcherSettleTimers) clearTimeout(timer);
 
-    const gap = next.getBoundingClientRect().left - launcherButton.getBoundingClientRect().right;
-    return gap <= 16;
-  }
-
-  // 오른쪽 묶음의 첫 요소에도 margin-left: auto가 있으면 돋보기가 빈 공간 가운데에
-  // 떠 보이므로, 그 요소 뒤로 옮겨 전송 버튼 묶음에 바로 붙임
-  function snugLauncher(sendButton) {
-    for (let step = 0; step < 6 && !isLauncherSnug(); step += 1) {
-      const next = nextVisibleSibling(launcherButton);
-      if (!next || next === sendButton) break;
-
-      launcherButton.style.marginLeft = "0px";
-      next.after(launcherButton);
-    }
+    launcherSettleTimers = [1500, 5000].map((delay) =>
+      setTimeout(() => {
+        if (!isLauncherPlaced() || launcherButton.hidden) return;
+        if (hasVisibleSiblingAfter(launcherButton)) {
+          launcherButton.parentElement.appendChild(launcherButton);
+        }
+      }, delay)
+    );
   }
 
   function startLauncherTracking() {
     stopLauncherTracking();
-    placeLauncherBesideSendButton();
+    placeLauncher();
 
-    launcherObserver = new MutationObserver((mutations) => {
-      if (
-        launcherButton?.isConnected &&
-        !launcherButton.classList.contains("ccs2-launcher-fallback")
-      ) {
-        const rowChanged = mutations.some(
-          (mutation) => mutation.target === launcherButton.parentElement
-        );
-
-        if (!rowChanged) return;
-      }
-
-      if (launcherPlacementFrame !== null) return;
+    // 제자리에 있으면 아무것도 하지 않고, Crack이 입력창을 다시 그려 빠졌을 때만 다시 넣음
+    launcherObserver = new MutationObserver(() => {
+      if (isLauncherPlaced() || launcherPlacementFrame !== null) return;
 
       launcherPlacementFrame = window.requestAnimationFrame(() => {
         launcherPlacementFrame = null;
-        placeLauncherBesideSendButton();
+        placeLauncher();
       });
     });
 
