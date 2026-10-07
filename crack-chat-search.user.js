@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 채팅방 내부 검색
 // @namespace    https://github.com/mynameislovesong
-// @version      2.0.3
+// @version      2.0.4
 // @description  현재 채팅방의 전체 대화를 검색하고, 결과나 북마크를 누르면 원래 채팅창의 해당 메시지로 이동합니다. 과거 로그 범위 불러오기와 화면 본문 검색도 그대로 제공합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_addStyle
@@ -976,17 +976,6 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-#ccs2-launcher.ccs2-launcher-fallback {
-  position: fixed;
-  z-index: 2147483647;
-  left: auto !important;
-  top: auto !important;
-  right: 20px;
-  bottom: 24px;
-  width: 40px;
-  height: 40px;
 }
 
 #ccs2-launcher:hover {
@@ -4426,7 +4415,6 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
   let launcherButton;
   let launcherObserver = null;
   let launcherPlacementFrame = null;
-  let launcherSettleTimers = [];
 
   let activeJob = 0;
   let loadingHistory = false;
@@ -4680,8 +4668,12 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
   }
 
   /* =========================================================
-   * 전송 버튼 옆 돋보기 버튼 (1.x 배치 로직 유지)
+   * 입력창 버튼 영역의 돋보기 버튼
    * ======================================================= */
+
+  // 입력창 하단 버튼 컨테이너 (번역 확장 등 다른 스크립트도 같은 곳에 appendChild로 추가함).
+  // .space-x-2만으로는 페이지에 여러 개가 있으므로 입력창 하단 영역으로 범위를 좁힘
+  const COMPOSER_TOOLBAR_SELECTOR = ".pb-3.pl-3.pr-2\\.5.pt-1\\.5 .flex.items-center.space-x-2";
 
   function isOwnElement(element) {
     return Boolean(
@@ -4689,137 +4681,30 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
     );
   }
 
-  function isVisibleElement(element) {
-    if (!element || !element.isConnected) return false;
-
-    const style = getComputedStyle(element);
-
-    if (
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      Number(style.opacity) === 0
-    ) {
-      return false;
-    }
-
-    const rect = element.getBoundingClientRect();
-    return rect.width >= 8 && rect.height >= 8;
-  }
-
-  function findComposerEditable() {
-    const candidates = [
-      ...document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]')
-    ]
-      .filter((element) => !isOwnElement(element))
-      .filter(isVisibleElement)
-      .map((element) => ({ element, rect: element.getBoundingClientRect() }))
-      .filter(({ rect }) => rect.top > window.innerHeight * 0.42)
-      .sort((a, b) => b.rect.bottom - a.rect.bottom);
-
-    return candidates[0]?.element || null;
-  }
-
-  function findComposerContainer(editable) {
-    if (!editable) return null;
-
-    let element = editable.parentElement;
-
-    for (let depth = 0; element && depth < 7; depth += 1) {
-      const rect = element.getBoundingClientRect();
-
-      const buttonCount = element.querySelectorAll(
-        'button, [role="button"], input[type="button"], input[type="submit"]'
-      ).length;
-
-      if (buttonCount > 0 && rect.width >= 240 && rect.bottom > window.innerHeight * 0.7) {
-        return element;
-      }
-
-      element = element.parentElement;
-    }
-
-    return null;
-  }
-
-  // 입력창 아래 줄 왼쪽의 Crack 도구 모음(이미지 첨부 등). 전송 버튼 쪽 줄은
-  // 다른 스크립트(MuseWriter·WRMC 등)가 "전송 버튼 바로 앞" 자리를 두고 계속
-  // 재배치하므로 끼어들지 않음
-  function findComposerToolbar() {
-    const container = findComposerContainer(findComposerEditable());
-    if (!container) return null;
-
-    for (const row of container.querySelectorAll(".flex.items-center.justify-between")) {
-      const toolbar = [...row.children].find(
-        (child) =>
-          child !== launcherButton &&
-          child.matches(".flex.items-center.space-x-2") &&
-          isVisibleElement(child)
-      );
-
-      if (toolbar) return toolbar;
-    }
-
-    return null;
-  }
-
   function isLauncherPlaced() {
     return Boolean(
       launcherButton?.isConnected &&
-      !launcherButton.classList.contains("ccs2-launcher-fallback") &&
-      launcherButton.parentElement?.matches(".flex.items-center.space-x-2")
+      launcherButton.parentElement?.matches(COMPOSER_TOOLBAR_SELECTOR)
     );
   }
 
+  // 컨테이너 끝에 한 번 추가하고, 이후 순서는 건드리지 않음.
+  // 컨테이너를 못 찾으면 다른 곳에 두지 않고 다음 DOM 변화 때 다시 시도함
   function placeLauncher() {
-    if (!launcherButton || launcherButton.hidden) return;
+    if (!launcherButton || launcherButton.hidden || isLauncherPlaced()) return;
 
-    // 한 번 도구 모음에 들어가면 다시 옮기지 않음 (다른 스크립트와 자리를 다투지 않음)
-    if (isLauncherPlaced()) return;
+    const toolbar = document.querySelector(COMPOSER_TOOLBAR_SELECTOR);
+    if (!toolbar) return;
 
-    const toolbar = findComposerToolbar();
-
-    if (!toolbar) {
-      if (launcherButton.parentElement !== document.documentElement) {
-        document.documentElement.appendChild(launcherButton);
-      }
-
-      launcherButton.classList.add("ccs2-launcher-fallback");
-      return;
-    }
-
-    launcherButton.classList.remove("ccs2-launcher-fallback");
+    // 같은 버튼 요소를 옮겨 넣으므로 다시 그려져도 중복으로 생기지 않음
     toolbar.appendChild(launcherButton);
-    scheduleLauncherSettle();
-  }
-
-  function hasVisibleSiblingAfter(element) {
-    for (let next = element.nextElementSibling; next; next = next.nextElementSibling) {
-      if (next.getBoundingClientRect().width > 0) return true;
-    }
-
-    return false;
-  }
-
-  // 다른 스크립트가 늦게 아이콘을 뒤에 붙이는 경우를 위해 두 번만 맨 뒤로 다시 옮기고,
-  // 그 뒤로는 움직이지 않음 (맨 뒤를 고집하는 스크립트와 계속 다투지 않도록)
-  function scheduleLauncherSettle() {
-    for (const timer of launcherSettleTimers) clearTimeout(timer);
-
-    launcherSettleTimers = [1500, 5000].map((delay) =>
-      setTimeout(() => {
-        if (!isLauncherPlaced() || launcherButton.hidden) return;
-        if (hasVisibleSiblingAfter(launcherButton)) {
-          launcherButton.parentElement.appendChild(launcherButton);
-        }
-      }, delay)
-    );
   }
 
   function startLauncherTracking() {
     stopLauncherTracking();
     placeLauncher();
 
-    // 제자리에 있으면 아무것도 하지 않고, Crack이 입력창을 다시 그려 빠졌을 때만 다시 넣음
+    // 제자리에 있으면 아무것도 하지 않고, React가 입력창을 다시 그려 빠졌을 때만 새 컨테이너에 넣음
     launcherObserver = new MutationObserver(() => {
       if (isLauncherPlaced() || launcherPlacementFrame !== null) return;
 
@@ -4829,7 +4714,7 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
       });
     });
 
-    launcherObserver.observe(document.documentElement, {
+    launcherObserver.observe(document.body, {
       childList: true,
       subtree: true
     });
@@ -4864,7 +4749,6 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
     });
 
     launcherButton.addEventListener("click", () => openPanel());
-    document.documentElement.appendChild(launcherButton);
   }
 
   /* =========================================================
