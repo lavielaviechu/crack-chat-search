@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 채팅방 내부 검색
 // @namespace    https://github.com/mynameislovesong
-// @version      2.0.0
+// @version      2.0.1
 // @description  현재 채팅방의 전체 대화를 검색하고, 결과나 북마크를 누르면 원래 채팅창의 해당 메시지로 이동합니다. 과거 로그 범위 불러오기와 화면 본문 검색도 그대로 제공합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_addStyle
@@ -375,6 +375,43 @@
   overflow: hidden;
   color: var(--ccs-faint);
   text-overflow: ellipsis;
+}
+
+/* 역할 배지: 형광펜을 칠한 듯한 배경 (검색어 강조색인 노랑과 겹치지 않는 보라/초록) */
+.ccs2-role {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 3px 7px 4px 6px / 6px 3px 7px 4px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 17px;
+}
+
+.ccs2-role-user {
+  background: #ede4ff;
+  color: #7044b5;
+}
+
+.ccs2-role-char {
+  background: #ddf5e5;
+  color: #287a4b;
+}
+
+#ccs2-root[data-ccs-theme="dark"] .ccs2-role-user {
+  background: rgba(167, 128, 245, 0.26);
+  color: #d9c8ff;
+}
+
+#ccs2-root[data-ccs-theme="dark"] .ccs2-role-char {
+  background: rgba(72, 187, 120, 0.24);
+  color: #a8e9c1;
+}
+
+.ccs2-status-note {
+  flex-basis: 100%;
+  color: var(--ccs-faint);
+  font-size: 11.5px;
 }
 
 .ccs2-snippet {
@@ -941,6 +978,8 @@
   const CURRENT_HIGHLIGHT = "crack-story-search-loader-current";
   const START_FROM_FIRST_KEY = "crack-story-search-start-from-first";
   const SCOPE_KEY = "ccs2-search-scope";
+  const ROLE_FILTER_KEY = "ccs2-role-filter";
+  const ROLE_FILTERS = ["all", "assistant", "user"];
   const BM_SORT_KEY = "ccs2-bookmark-sort";
   const BM_KEY_PREFIX = "ccs2.bookmarks.";
 
@@ -1161,12 +1200,6 @@
   function labelHint(label) {
     if (label.startsWith("T")) return "메시지 본문에 적힌 턴 번호";
     if (label.startsWith("#")) return "대화 순번 (사용자 메시지 기준, 본문에 턴 번호가 없을 때)";
-    return "";
-  }
-
-  function roleLabel(role) {
-    if (role === "user") return "나";
-    if (role === "assistant") return "캐릭터";
     return "";
   }
 
@@ -1848,6 +1881,10 @@
     hoverButton: null,
     flash: null,
     scope: readPref(SCOPE_KEY, "api") === "dom" ? "dom" : "api",
+    roleFilter: ROLE_FILTERS.includes(readPref(ROLE_FILTER_KEY, "all"))
+      ? readPref(ROLE_FILTER_KEY, "all")
+      : "all",
+    roleButtons: {},
     debounceTimer: null,
     composing: false,
     renderTimer: null
@@ -2122,6 +2159,7 @@
     setHighlights(ranges);
 
     renderSearch();
+    resolveRolesForFilter();
   }
 
   /* =========================================================
@@ -2132,19 +2170,41 @@
     return readPref(START_FROM_FIRST_KEY, "false") === "true";
   }
 
-  function getSortedResults() {
-    const oldestFirst = isOldestFirst();
+  // 역할은 API의 실제 role 값으로만 판단함 (DOM 구조로 추정하지 않음)
+  function getResultRole(result) {
+    return getRecord(result.id)?.role || null;
+  }
 
-    if (search.sortedCache && search.sortedCache.oldestFirst === oldestFirst) {
-      return search.sortedCache.list;
+  function getSortedResults() {
+    return getResultView().list;
+  }
+
+  // 정렬과 CHAR/USER 필터를 적용한 결과 (원본 결과는 그대로 두고 표시만 바꿈)
+  function getResultView() {
+    const oldestFirst = isOldestFirst();
+    const roleFilter = ui.roleFilter;
+    const cache = search.sortedCache;
+
+    if (cache && cache.oldestFirst === oldestFirst && cache.roleFilter === roleFilter) {
+      return cache;
     }
 
-    const list = [...search.results].sort((a, b) =>
+    let unknownRole = 0;
+
+    const filtered = roleFilter === "all"
+      ? [...search.results]
+      : search.results.filter((result) => {
+        const role = getResultRole(result);
+        if (!role) unknownRole += 1;
+        return role === roleFilter;
+      });
+
+    const list = filtered.sort((a, b) =>
       oldestFirst ? compareIds(a.id, b.id) : compareIds(b.id, a.id)
     );
 
-    search.sortedCache = { oldestFirst, list };
-    return list;
+    search.sortedCache = { oldestFirst, roleFilter, list, unknownRole };
+    return search.sortedCache;
   }
 
   function getRecord(id) {
@@ -2598,7 +2658,7 @@
     if (context.kind !== "search") return;
 
     // 방향 -1 = 위(더 오래된 메시지), +1 = 아래(더 최근 메시지)
-    const byTime = [...search.results].sort((a, b) => compareIds(a.id, b.id));
+    const byTime = [...getSortedResults()].sort((a, b) => compareIds(a.id, b.id));
     const position = byTime.findIndex((result) => result.id === context.id);
     const neighbor = byTime[position + direction];
 
@@ -3130,6 +3190,27 @@
       })
     };
 
+    ui.roleButtons = {
+      all: h("button", {
+        type: "button",
+        text: "전체",
+        title: "모든 메시지 검색",
+        onclick: () => setRoleFilter("all")
+      }),
+      assistant: h("button", {
+        type: "button",
+        text: "CHAR",
+        title: "캐릭터(AI) 메시지만 검색",
+        onclick: () => setRoleFilter("assistant")
+      }),
+      user: h("button", {
+        type: "button",
+        text: "USER",
+        title: "내가 보낸 메시지만 검색",
+        onclick: () => setRoleFilter("user")
+      })
+    };
+
     ui.oldestFirst = h("input", { type: "checkbox" });
     ui.oldestFirst.checked = isOldestFirst();
     ui.oldestFirst.addEventListener("change", () => {
@@ -3201,6 +3282,18 @@
           h("div", { class: "ccs2-seg" }, ui.scopeButtons.api, ui.scopeButtons.dom)
         ),
         h(
+          "div",
+          {},
+          h("div", { class: "ccs2-adv-label", text: "검색 대상" }),
+          h(
+            "div",
+            { class: "ccs2-seg" },
+            ui.roleButtons.all,
+            ui.roleButtons.assistant,
+            ui.roleButtons.user
+          )
+        ),
+        h(
           "label",
           { class: "ccs2-check", title: "체크하면 가장 오래된 결과부터 보여줍니다" },
           ui.oldestFirst,
@@ -3238,7 +3331,54 @@
     });
 
     renderScopeButtons();
+    renderRoleButtons();
     return details;
+  }
+
+  function setRoleFilter(roleFilter) {
+    if (!ROLE_FILTERS.includes(roleFilter) || ui.roleFilter === roleFilter) return;
+
+    ui.roleFilter = roleFilter;
+    writePref(ROLE_FILTER_KEY, roleFilter);
+    renderRoleButtons();
+
+    // 이미 찾은 결과를 다시 거르기만 함 (재검색·재다운로드 없음)
+    search.sortedCache = null;
+    search.renderLimit = RENDER_STEP;
+    ui.listScrollTop = 0;
+    if (ui.resultList) ui.resultList.scrollTop = 0;
+
+    renderSearch();
+    resolveRolesForFilter();
+  }
+
+  function renderRoleButtons() {
+    for (const [roleFilter, button] of Object.entries(ui.roleButtons)) {
+      button.setAttribute("aria-pressed", String(ui.roleFilter === roleFilter));
+    }
+  }
+
+  // '불러온 대화만' 검색 결과는 역할을 모를 수 있으므로, 필터를 쓸 때만
+  // 아직 받지 않은 API 데이터를 받아 실제 role을 확인함 (이미 받은 캐시는 재사용)
+  function resolveRolesForFilter() {
+    if (ui.roleFilter === "all" || !search.results.length) return;
+    if (!search.results.some((result) => !getResultRole(result))) return;
+
+    const chatId = currentChatId();
+    if (!chatId) return;
+
+    const store = getStore(chatId);
+    if (store.complete) return;
+
+    const job = search.job;
+
+    loadStore(store).then(() => {
+      if (job !== search.job) return;
+      search.sortedCache = null;
+      renderSearch();
+    });
+
+    renderStatus();
   }
 
   function setScope(scope) {
@@ -3462,7 +3602,9 @@
 
   function renderStatus() {
     const status = ui.status;
-    const count = search.results.length;
+    const view = getResultView();
+    const count = view.list.length;
+    const filterName = ui.roleFilter === "assistant" ? "CHAR" : ui.roleFilter === "user" ? "USER" : "";
 
     const main = h("span", { class: "ccs2-status-main" });
     const side = h("span", { class: "ccs2-status-side" });
@@ -3474,7 +3616,9 @@
       main.textContent = ui.scope === "dom" ? "불러온 대화 검색" : "전체 대화 검색";
       side.textContent = "Enter로 검색";
     } else {
-      main.textContent = `검색 결과 ${formatNumber(count)}개`;
+      main.textContent = filterName
+        ? `${filterName} 결과 ${formatNumber(count)}개`
+        : `검색 결과 ${formatNumber(count)}개`;
 
       if (search.status === "searching") {
         side.append(
@@ -3500,7 +3644,27 @@
       }
     }
 
-    status.replaceChildren(main, side);
+    const children = [main, side];
+
+    if (filterName && view.unknownRole && search.status !== "searching") {
+      const store = stores.get(currentChatId());
+
+      children.push(
+        store?.loading
+          ? h("span", {
+            class: "ccs2-status-note",
+            text: `역할 확인 중… (${formatNumber(view.unknownRole)}개)`
+          })
+          : h(
+            "span",
+            { class: "ccs2-status-note" },
+            `역할을 확인할 수 없는 메시지 ${formatNumber(view.unknownRole)}개 제외 `,
+            action("다시 확인", resolveRolesForFilter)
+          )
+      );
+    }
+
+    status.replaceChildren(...children);
   }
 
   function renderResults() {
@@ -3533,7 +3697,9 @@
           ? "검색하는 중…"
           : search.status === "error"
             ? "불러온 대화에서도 결과를 찾지 못했어요."
-            : `‘${search.query}’에 대한 결과가 없어요.`;
+            : ui.roleFilter !== "all" && search.results.length
+              ? `‘${search.query}’에 대한 ${ui.roleFilter === "user" ? "USER" : "CHAR"} 결과가 없어요.`
+              : `‘${search.query}’에 대한 결과가 없어요.`;
 
       list.replaceChildren(h("div", { class: "ccs2-empty", text: message }));
       return;
@@ -3573,10 +3739,14 @@
     const meta = h("div", { class: "ccs2-meta" });
     if (label) meta.append(h("span", { class: "ccs2-turn", text: label, title: labelHint(label) }));
 
-    const roleText = roleLabel(role);
-    if (roleText) {
-      if (label) meta.append(h("span", { text: "·" }));
-      meta.append(h("span", { text: roleText }));
+    if (role === "user" || role === "assistant") {
+      meta.append(
+        h("span", {
+          class: `ccs2-role ccs2-role-${role === "user" ? "user" : "char"}`,
+          text: role === "user" ? "USER" : "CHAR",
+          title: role === "user" ? "내가 보낸 메시지" : "캐릭터(AI) 메시지"
+        })
+      );
     }
 
     if (result.count > 1) {
@@ -4044,6 +4214,7 @@
    * ======================================================= */
 
   let hoverGroup = null;
+  let hoverAnchor = null;
   let hoverTopInset = null;
   let hoverHideTimer = null;
   let hoverFrame = null;
@@ -4097,6 +4268,7 @@
     document.addEventListener("scroll", onAnyScroll, { capture: true, passive: true });
     window.addEventListener("resize", () => {
       hoverTopInset = null;
+      hoverAnchor = null;
       onAnyScroll();
     }, { passive: true });
   }
@@ -4139,6 +4311,7 @@
   function hideHoverButton() {
     clearTimeout(hoverHideTimer);
     hoverGroup = null;
+    hoverAnchor = null;
     if (ui.hoverButton) ui.hoverButton.hidden = true;
   }
 
@@ -4164,23 +4337,106 @@
     const size = 30;
 
     if (hoverTopInset === null) hoverTopInset = measureChatTopInset(rect);
+    if (!hoverAnchor || hoverAnchor.group !== hoverGroup || !hoverAnchor.body.isConnected) {
+      hoverAnchor = measureHoverAnchor(hoverGroup);
+    }
+
+    // 기준은 그룹 상자가 아니라 메시지 본문(.wrtn-markdown)임.
+    // 그룹 상자에는 사용자 메시지의 위아래 여백이나 다른 스크립트의 툴바가 포함돼
+    // 본문 첫 줄과 어긋남
+    const body = hoverAnchor.body.getBoundingClientRect();
 
     // 채팅 헤더와 겹치지 않도록 대화가 보이는 영역 안쪽에만 표시함
     const minTop = hoverTopInset + 8;
     const maxTop = window.innerHeight - size - 8;
 
-    if (rect.bottom < minTop + size || rect.top > maxTop) {
+    if (body.bottom < minTop + size || body.top > maxTop) {
       button.style.visibility = "hidden";
       return;
     }
 
+    // 본문 첫 줄의 세로 중앙에 맞추고, 긴 메시지는 본문이 보이는 동안 위쪽에 머무름
+    const lineTop = body.top + hoverAnchor.lineCenter - size / 2;
+    let top = clamp(lineTop, minTop, Math.min(body.bottom - size, maxTop));
+
+    // 데스크톱: 메시지 열 오른쪽 바깥 / 좁은 화면: 본문 오른쪽 위 안쪽
     const outside = rect.right + 10 + size <= window.innerWidth - 6;
-    const left = outside ? rect.right + 10 : rect.right - size - 6;
-    const top = clamp(rect.top + 8, minTop, Math.min(rect.bottom - size - 4, maxTop));
+    let left = outside ? rect.right + 10 : body.right - size;
+
+    // 리롤·수정·메뉴 등 다른 버튼을 가리면 비켜 놓음 (바깥이면 위로, 안쪽이면 왼쪽으로)
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const obstacle = findObstacle(left, top, size);
+      if (!obstacle) break;
+
+      if (outside) top = obstacle.top - size - 6;
+      else left = obstacle.left - size - 6;
+    }
+
+    if (top < minTop || findObstacle(left, top, size)) {
+      button.style.visibility = "hidden";
+      return;
+    }
 
     button.style.visibility = "";
     button.style.left = `${Math.round(left)}px`;
     button.style.top = `${Math.round(top)}px`;
+  }
+
+  function measureHoverAnchor(group) {
+    const body = group.querySelector(".wrtn-markdown") || group;
+    const bodyRect = body.getBoundingClientRect();
+
+    // 본문 첫 글자의 줄 상자로 첫 줄 위치를 구함
+    let lineCenter = 12;
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) =>
+        node.nodeValue && node.nodeValue.trim()
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT
+    });
+
+    const first = walker.nextNode();
+
+    if (first) {
+      const offset = first.nodeValue.search(/\S/);
+      const range = document.createRange();
+      range.setStart(first, offset);
+      range.setEnd(first, offset + 1);
+
+      const lineRect = range.getClientRects()[0];
+      if (lineRect && lineRect.height) {
+        lineCenter = lineRect.top + lineRect.height / 2 - bodyRect.top;
+      }
+    }
+
+    return { group, body, lineCenter };
+  }
+
+  function findObstacle(left, top, size) {
+    const inset = 3;
+    const points = [
+      [left + size / 2, top + size / 2],
+      [left + inset, top + inset],
+      [left + size - inset, top + inset],
+      [left + inset, top + size - inset],
+      [left + size - inset, top + size - inset]
+    ];
+
+    for (const [x, y] of points) {
+      if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) continue;
+
+      for (const element of document.elementsFromPoint(x, y)) {
+        if (isOwnElement(element)) continue;
+
+        const control = element.closest(
+          'button, a[href], [role="button"], [aria-haspopup], input, textarea, select'
+        );
+
+        if (control && !isOwnElement(control)) return control.getBoundingClientRect();
+      }
+    }
+
+    return null;
   }
 
   function updateHoverButtonState() {
