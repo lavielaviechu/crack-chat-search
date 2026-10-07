@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 채팅방 내부 검색
 // @namespace    https://github.com/mynameislovesong
-// @version      2.0.1
+// @version      2.0.2
 // @description  현재 채팅방의 전체 대화를 검색하고, 결과나 북마크를 누르면 원래 채팅창의 해당 메시지로 이동합니다. 과거 로그 범위 불러오기와 화면 본문 검색도 그대로 제공합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_addStyle
@@ -14,8 +14,7 @@
   const STYLE = String.raw`
 #ccs2-root,
 #ccs2-mini,
-#ccs2-toast,
-#ccs2-hover-bm {
+#ccs2-toast {
   --ccs-bg: #ffffff;
   --ccs-surface: #f8f6f4;
   --ccs-hover: #f3efeb;
@@ -42,8 +41,7 @@
 
 #ccs2-root[data-ccs-theme="dark"],
 #ccs2-mini[data-ccs-theme="dark"],
-#ccs2-toast[data-ccs-theme="dark"],
-#ccs2-hover-bm[data-ccs-theme="dark"] {
+#ccs2-toast[data-ccs-theme="dark"] {
   --ccs-bg: #1f1d1b;
   --ccs-surface: #282522;
   --ccs-hover: #2f2b28;
@@ -69,8 +67,7 @@
 }
 
 /* 초기화 규칙은 :where()로 감싸 아래 컴포넌트 규칙보다 우선하지 않게 함 */
-:where(#ccs2-root, #ccs2-mini, #ccs2-toast) button,
-:where(#ccs2-hover-bm) {
+:where(#ccs2-root, #ccs2-mini, #ccs2-toast) button {
   margin: 0;
   font: inherit;
   color: inherit;
@@ -82,12 +79,11 @@
 #ccs2-mini [hidden],
 #ccs2-root[hidden],
 #ccs2-mini[hidden],
-#ccs2-toast[hidden],
-#ccs2-hover-bm[hidden] {
+#ccs2-toast[hidden] {
   display: none !important;
 }
 
-:where(#ccs2-root, #ccs2-mini, #ccs2-hover-bm) svg {
+:where(#ccs2-root, #ccs2-mini) svg {
   width: 16px;
   height: 16px;
   flex: none;
@@ -810,36 +806,84 @@
   white-space: nowrap;
 }
 
-/* ---------- 메시지 북마크 버튼 ---------- */
+/* ---------- 메시지 북마크 버튼 (각 메시지의 도구 영역 안) ---------- */
 
-#ccs2-hover-bm {
-  position: fixed;
-  z-index: 2147483645;
-  display: grid;
+.ccs2-msg-bm {
+  box-sizing: border-box;
+  display: inline-grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin: 0;
   padding: 0;
-  border: 1px solid var(--ccs-border);
+  border: 0;
   border-radius: 50%;
-  background: var(--ccs-bg);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.10);
-  color: var(--ccs-faint);
+  background: transparent;
+  color: #9a938d;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, background-color 120ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-#ccs2-hover-bm:hover,
-#ccs2-hover-bm:focus-visible {
-  color: var(--ccs-text);
-  outline: none;
-  border-color: var(--ccs-border-strong);
+.ccs2-msg-bm svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+  pointer-events: none;
 }
 
-#ccs2-hover-bm.is-on {
-  color: var(--ccs-accent);
+/* 북마크하지 않은 메시지는 마우스를 올리거나 포커스했을 때만 보임 */
+div[data-message-group-id]:hover .ccs2-msg-bm,
+div[data-message-group-id]:focus-within .ccs2-msg-bm,
+.ccs2-msg-bm.is-on {
+  opacity: 1;
+  pointer-events: auto;
 }
 
-#ccs2-hover-bm.is-on svg {
+.ccs2-msg-bm:hover {
+  background: rgba(128, 128, 128, 0.14);
+  color: #6f6862;
+}
+
+.ccs2-msg-bm:focus-visible {
+  opacity: 1;
+  outline: 2px solid #ff5b4a;
+  outline-offset: 1px;
+}
+
+.ccs2-msg-bm.is-on,
+.ccs2-msg-bm.is-on:hover {
+  color: #ff5b4a;
+}
+
+.ccs2-msg-bm.is-on svg {
   fill: currentColor;
+}
+
+/* 도구 영역이 block(사용자 메시지)일 때: 좌표 없이 absolute로 두어 원래 자리에 머물되
+   흐름에서 빠지게 해 높이를 바꾸지 않고, ⋯ 버튼 바로 왼쪽에 붙임 */
+.ccs2-msg-bm.is-overlay {
+  position: absolute;
+  margin-left: -32px;
+}
+
+/* 도구 영역을 찾지 못한 메시지: 메시지 안쪽 오른쪽 위 */
+.ccs2-msg-bm.is-corner {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ccs2-msg-bm {
+    transition: none;
+  }
 }
 
 #ccs2-flash {
@@ -1878,7 +1922,6 @@
     mini: null,
     toast: null,
     toastTimer: null,
-    hoverButton: null,
     flash: null,
     scope: readPref(SCOPE_KEY, "api") === "dom" ? "dom" : "api",
     roleFilter: ROLE_FILTERS.includes(readPref(ROLE_FILTER_KEY, "all"))
@@ -3020,7 +3063,7 @@
   function applyTheme() {
     const theme = detectTheme();
 
-    for (const element of [ui.root, ui.mini, ui.toast, ui.hoverButton]) {
+    for (const element of [ui.root, ui.mini, ui.toast]) {
       if (element && element.dataset.ccsTheme !== theme) {
         element.dataset.ccsTheme = theme;
       }
@@ -3861,7 +3904,7 @@
   function refreshBookmarkViews() {
     renderBookmarks();
     renderResults();
-    updateHoverButtonState();
+    refreshMessageBookmarkButtons();
   }
 
   function renderBookmarks() {
@@ -4210,246 +4253,163 @@
   }
 
   /* =========================================================
-   * 채팅 메시지 북마크 버튼 (메시지 DOM은 수정하지 않음)
+   * 채팅 메시지 북마크 버튼 (각 메시지의 도구 영역에 고정)
    * ======================================================= */
 
-  let hoverGroup = null;
-  let hoverAnchor = null;
-  let hoverTopInset = null;
-  let hoverHideTimer = null;
-  let hoverFrame = null;
+  const MSG_BM_CLASS = "ccs2-msg-bm";
+  const messageButtons = new WeakMap();
+  let observedMessageList = null;
+  let messageListObserver = null;
+  let messageButtonFrame = null;
 
-  // 스크롤 영역이 고정 헤더 뒤까지 이어져 있으므로, 대화가 실제로 보이기 시작하는
-  // 높이를 화면 좌표로 한 번 측정함
-  function measureChatTopInset(groupRect) {
-    const container = findScrollContainer();
-    const x = Math.round(groupRect.left + groupRect.width / 2);
-    const start = isPageScroller(container)
-      ? 0
-      : Math.max(Math.round(container.getBoundingClientRect().top), 0);
+  // Crack의 메시지 메뉴(⋯) 트리거가 들어 있는 영역을 도구 영역으로 사용함
+  // CHAR: 하단 도구 줄의 오른쪽 묶음 (가로 flex) / USER: ⋯ 버튼을 감싼 block
+  function findToolArea(group) {
+    const triggers = [...group.querySelectorAll('[aria-haspopup="menu"]')].filter(
+      (element) => !isOwnElement(element)
+    );
 
-    for (let y = start; y < Math.min(260, window.innerHeight / 2); y += 6) {
-      const element = document.elementFromPoint(x, y);
-      if (!element || isOwnElement(element)) continue;
-      if (isPageScroller(container) ? element.closest(GROUP_SELECTOR) : container.contains(element)) {
-        return y;
-      }
-    }
+    const trigger =
+      triggers.find((element) => element.querySelector('[aria-label="메시지 옵션"]')) ||
+      triggers[triggers.length - 1];
 
-    return start;
+    const area = trigger?.parentElement;
+    if (!area || area === group || !group.contains(area)) return null;
+
+    const style = getComputedStyle(area);
+    const inline = style.display.includes("flex") && !style.flexDirection.startsWith("column");
+
+    return { area, mode: inline ? "inline" : "overlay" };
   }
 
-  function createHoverButton() {
-    ui.hoverButton = h("button", {
-      id: "ccs2-hover-bm",
-      type: "button",
-      hidden: true,
-      icon: "star"
-    });
+  // 도구 영역이 없을 때: 본문을 감싼 요소 중 위치 기준이 되는(relative 등) 요소 안쪽
+  function findFallbackArea(group) {
+    let element = group.querySelector(".wrtn-markdown")?.parentElement;
 
-    ui.hoverButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-
-      const id = getGroupId(hoverGroup);
-      if (!id) return;
-
-      toggleBookmark(id);
-      updateHoverButtonState();
-    });
-
-    ui.hoverButton.addEventListener("pointerenter", () => clearTimeout(hoverHideTimer));
-    ui.hoverButton.addEventListener("pointerleave", scheduleHoverHide);
-
-    document.documentElement.appendChild(ui.hoverButton);
-
-    document.addEventListener("pointerover", onHoverTarget, { passive: true });
-    document.addEventListener("focusin", onHoverTarget);
-    document.addEventListener("scroll", onAnyScroll, { capture: true, passive: true });
-    window.addEventListener("resize", () => {
-      hoverTopInset = null;
-      hoverAnchor = null;
-      onAnyScroll();
-    }, { passive: true });
-  }
-
-  function onHoverTarget(event) {
-    if (!ui.ready || !isEpisodePage()) return;
-
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-
-    if (target.closest("#ccs2-hover-bm")) {
-      clearTimeout(hoverHideTimer);
-      return;
-    }
-
-    if (target.closest("#ccs2-root, #ccs2-mini, #ccs2-toast")) return;
-
-    const group = target.closest(GROUP_SELECTOR);
-
-    if (group) {
-      clearTimeout(hoverHideTimer);
-
-      if (group !== hoverGroup) {
-        hoverGroup = group;
-        updateHoverButtonState();
+    while (element && element !== group) {
+      if (getComputedStyle(element).position !== "static") {
+        return { area: element, mode: "corner" };
       }
 
-      positionHoverButton();
-      ui.hoverButton.hidden = false;
-    } else if (hoverGroup) {
-      scheduleHoverHide();
-    }
-  }
-
-  function scheduleHoverHide() {
-    clearTimeout(hoverHideTimer);
-    hoverHideTimer = setTimeout(hideHoverButton, 450);
-  }
-
-  function hideHoverButton() {
-    clearTimeout(hoverHideTimer);
-    hoverGroup = null;
-    hoverAnchor = null;
-    if (ui.hoverButton) ui.hoverButton.hidden = true;
-  }
-
-  function onAnyScroll() {
-    if (!hoverGroup || hoverFrame !== null) return;
-
-    hoverFrame = requestAnimationFrame(() => {
-      hoverFrame = null;
-      positionHoverButton();
-    });
-  }
-
-  function positionHoverButton() {
-    const button = ui.hoverButton;
-    if (!button || !hoverGroup) return;
-
-    if (!hoverGroup.isConnected) {
-      hideHoverButton();
-      return;
-    }
-
-    const rect = hoverGroup.getBoundingClientRect();
-    const size = 30;
-
-    if (hoverTopInset === null) hoverTopInset = measureChatTopInset(rect);
-    if (!hoverAnchor || hoverAnchor.group !== hoverGroup || !hoverAnchor.body.isConnected) {
-      hoverAnchor = measureHoverAnchor(hoverGroup);
-    }
-
-    // 기준은 그룹 상자가 아니라 메시지 본문(.wrtn-markdown)임.
-    // 그룹 상자에는 사용자 메시지의 위아래 여백이나 다른 스크립트의 툴바가 포함돼
-    // 본문 첫 줄과 어긋남
-    const body = hoverAnchor.body.getBoundingClientRect();
-
-    // 채팅 헤더와 겹치지 않도록 대화가 보이는 영역 안쪽에만 표시함
-    const minTop = hoverTopInset + 8;
-    const maxTop = window.innerHeight - size - 8;
-
-    if (body.bottom < minTop + size || body.top > maxTop) {
-      button.style.visibility = "hidden";
-      return;
-    }
-
-    // 본문 첫 줄의 세로 중앙에 맞추고, 긴 메시지는 본문이 보이는 동안 위쪽에 머무름
-    const lineTop = body.top + hoverAnchor.lineCenter - size / 2;
-    let top = clamp(lineTop, minTop, Math.min(body.bottom - size, maxTop));
-
-    // 데스크톱: 메시지 열 오른쪽 바깥 / 좁은 화면: 본문 오른쪽 위 안쪽
-    const outside = rect.right + 10 + size <= window.innerWidth - 6;
-    let left = outside ? rect.right + 10 : body.right - size;
-
-    // 리롤·수정·메뉴 등 다른 버튼을 가리면 비켜 놓음 (바깥이면 위로, 안쪽이면 왼쪽으로)
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const obstacle = findObstacle(left, top, size);
-      if (!obstacle) break;
-
-      if (outside) top = obstacle.top - size - 6;
-      else left = obstacle.left - size - 6;
-    }
-
-    if (top < minTop || findObstacle(left, top, size)) {
-      button.style.visibility = "hidden";
-      return;
-    }
-
-    button.style.visibility = "";
-    button.style.left = `${Math.round(left)}px`;
-    button.style.top = `${Math.round(top)}px`;
-  }
-
-  function measureHoverAnchor(group) {
-    const body = group.querySelector(".wrtn-markdown") || group;
-    const bodyRect = body.getBoundingClientRect();
-
-    // 본문 첫 글자의 줄 상자로 첫 줄 위치를 구함
-    let lineCenter = 12;
-    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
-      acceptNode: (node) =>
-        node.nodeValue && node.nodeValue.trim()
-          ? NodeFilter.FILTER_ACCEPT
-          : NodeFilter.FILTER_REJECT
-    });
-
-    const first = walker.nextNode();
-
-    if (first) {
-      const offset = first.nodeValue.search(/\S/);
-      const range = document.createRange();
-      range.setStart(first, offset);
-      range.setEnd(first, offset + 1);
-
-      const lineRect = range.getClientRects()[0];
-      if (lineRect && lineRect.height) {
-        lineCenter = lineRect.top + lineRect.height / 2 - bodyRect.top;
-      }
-    }
-
-    return { group, body, lineCenter };
-  }
-
-  function findObstacle(left, top, size) {
-    const inset = 3;
-    const points = [
-      [left + size / 2, top + size / 2],
-      [left + inset, top + inset],
-      [left + size - inset, top + inset],
-      [left + inset, top + size - inset],
-      [left + size - inset, top + size - inset]
-    ];
-
-    for (const [x, y] of points) {
-      if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) continue;
-
-      for (const element of document.elementsFromPoint(x, y)) {
-        if (isOwnElement(element)) continue;
-
-        const control = element.closest(
-          'button, a[href], [role="button"], [aria-haspopup], input, textarea, select'
-        );
-
-        if (control && !isOwnElement(control)) return control.getBoundingClientRect();
-      }
+      element = element.parentElement;
     }
 
     return null;
   }
 
-  function updateHoverButtonState() {
-    const button = ui.hoverButton;
-    if (!button) return;
+  function createMessageButton() {
+    const button = h("button", {
+      type: "button",
+      class: MSG_BM_CLASS,
+      icon: "star"
+    });
 
-    const id = getGroupId(hoverGroup);
-    const saved = Boolean(id) && bookmarkedIds().has(id);
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const id = button.dataset.messageId;
+      if (id) toggleBookmark(id);
+    });
+
+    return button;
+  }
+
+  function setMessageButtonState(button, saved) {
+    if (button.classList.contains("is-on") === saved && button.hasAttribute("aria-pressed")) {
+      return;
+    }
 
     button.classList.toggle("is-on", saved);
     button.setAttribute("aria-pressed", String(saved));
     button.setAttribute("aria-label", saved ? "이 메시지 북마크 해제" : "이 메시지 북마크");
     button.title = saved ? "북마크 해제" : "이 메시지 북마크";
+  }
+
+  function ensureMessageButton(group, savedIds) {
+    const id = getGroupId(group);
+    if (!ID_RE.test(id)) return;
+
+    let button = messageButtons.get(group);
+
+    // React가 다시 그려 같은 메시지 안에 별표가 둘 이상 남으면 하나만 남김
+    for (const extra of group.querySelectorAll(`.${MSG_BM_CLASS}`)) {
+      if (extra !== button) extra.remove();
+    }
+
+    const placed = button && button.isConnected && group.contains(button);
+
+    // 이미 도구 영역에 있으면 그대로 둠 (다른 스크립트와 위치를 두고 다투지 않음)
+    if (!placed || button.dataset.mode === "corner") {
+      const place = findToolArea(group) || (placed ? null : findFallbackArea(group));
+
+      if (place) {
+        if (!button) button = createMessageButton();
+
+        button.dataset.mode = place.mode;
+        button.classList.toggle("is-overlay", place.mode === "overlay");
+        button.classList.toggle("is-corner", place.mode === "corner");
+
+        if (place.mode === "corner") place.area.append(button);
+        else place.area.insertBefore(button, place.area.firstChild);
+      } else if (!placed) {
+        // 안정적인 위치가 없으면 화면에 띄우지 않음
+        button?.remove();
+        messageButtons.delete(group);
+        return;
+      }
+    }
+
+    messageButtons.set(group, button);
+    if (button.dataset.messageId !== id) button.dataset.messageId = id;
+    setMessageButtonState(button, savedIds.has(id));
+  }
+
+  function ensureMessageButtons() {
+    if (!ui.ready || !isEpisodePage()) return;
+
+    const savedIds = bookmarkedIds();
+    for (const group of getMessageGroups()) ensureMessageButton(group, savedIds);
+  }
+
+  function scheduleMessageButtons() {
+    if (messageButtonFrame !== null) return;
+
+    messageButtonFrame = requestAnimationFrame(() => {
+      messageButtonFrame = null;
+      ensureMessageButtons();
+    });
+  }
+
+  // 관찰 범위는 메시지 목록 하나로 제한하고, 본문 글자 변화(생성 중 스트리밍)는 무시함
+  function watchMessageList() {
+    const list = document.querySelector(GROUP_SELECTOR)?.parentElement || null;
+    if (list === observedMessageList && list?.isConnected) return;
+
+    messageListObserver?.disconnect();
+    observedMessageList = list;
+    if (!list) return;
+
+    messageListObserver = new MutationObserver((mutations) => {
+      const relevant = mutations.some(
+        (mutation) =>
+          !(mutation.target instanceof Element) ||
+          !mutation.target.closest(".wrtn-markdown")
+      );
+
+      if (relevant) scheduleMessageButtons();
+    });
+
+    messageListObserver.observe(list, { childList: true, subtree: true });
+    scheduleMessageButtons();
+  }
+
+  function refreshMessageBookmarkButtons() {
+    const savedIds = bookmarkedIds();
+
+    for (const button of document.querySelectorAll(`.${MSG_BM_CLASS}`)) {
+      setMessageButtonState(button, savedIds.has(button.dataset.messageId));
+    }
   }
 
   /* =========================================================
@@ -4722,7 +4682,7 @@
 
   function isOwnElement(element) {
     return Boolean(
-      element?.closest?.("#ccs2-root, #ccs2-mini, #ccs2-toast, #ccs2-hover-bm")
+      element?.closest?.("#ccs2-root, #ccs2-mini, #ccs2-toast, .ccs2-msg-bm")
     );
   }
 
@@ -5068,7 +5028,6 @@
     injectStyles();
     createPanel();
     createFloatingElements();
-    createHoverButton();
     createLauncher();
 
     ui.ready = true;
@@ -5076,6 +5035,7 @@
     renderSearch();
     renderBookmarks();
     setStatus(`현재 불러온 메시지 묶음 ${getMessageGroups().length}개`);
+    watchMessageList();
 
     return true;
   }
@@ -5089,8 +5049,6 @@
     clearTimeout(ui.debounceTimer);
     clearHighlights();
     hideMini();
-    hideHoverButton();
-    hoverTopInset = null;
 
     Object.assign(search, {
       chatId: currentChatId(),
@@ -5165,6 +5123,9 @@
 
       return;
     }
+
+    // 채팅방을 옮기거나 목록이 다시 만들어지면 새 목록을 감시함
+    watchMessageList();
 
     themeTick += 1;
     if (themeTick % 5 === 0) applyTheme();
