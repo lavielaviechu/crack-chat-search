@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         크랙 채팅방 내부 검색
 // @namespace    https://github.com/mynameislovesong
-// @version      2.0.4
+// @version      2.0.5
 // @description  현재 채팅방의 전체 대화를 검색하고, 결과나 북마크를 누르면 원래 채팅창의 해당 메시지로 이동합니다. 과거 로그 범위 불러오기와 화면 본문 검색도 그대로 제공합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_addStyle
@@ -4671,29 +4671,87 @@ div[data-message-group-id]:focus-within .ccs2-msg-bm,
    * 입력창 버튼 영역의 돋보기 버튼
    * ======================================================= */
 
-  // 입력창 하단 버튼 컨테이너 (번역 확장 등 다른 스크립트도 같은 곳에 appendChild로 추가함).
-  // .space-x-2만으로는 페이지에 여러 개가 있으므로 입력창 하단 영역으로 범위를 좁힘
-  const COMPOSER_TOOLBAR_SELECTOR = ".pb-3.pl-3.pr-2\\.5.pt-1\\.5 .flex.items-center.space-x-2";
-
   function isOwnElement(element) {
     return Boolean(
       element?.closest?.("#ccs2-root, #ccs2-mini, #ccs2-toast, .ccs2-msg-bm")
     );
   }
 
-  function isLauncherPlaced() {
-    return Boolean(
-      launcherButton?.isConnected &&
-      launcherButton.parentElement?.matches(COMPOSER_TOOLBAR_SELECTOR)
-    );
+  // 화면에 보이는 입력 요소 중 가장 아래에 있는 것을 채팅 입력창으로 봄
+  function findComposerEditor() {
+    let editor = null;
+    let editorTop = -Infinity;
+
+    for (const element of document.querySelectorAll(
+      'textarea, [contenteditable="true"], [role="textbox"]'
+    )) {
+      if (isOwnElement(element)) continue;
+
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 120 || rect.height <= 18) continue;
+
+      if (rect.top > editorTop) {
+        editor = element;
+        editorTop = rect.top;
+      }
+    }
+
+    return editor;
   }
 
-  // 컨테이너 끝에 한 번 추가하고, 이후 순서는 건드리지 않음.
-  // 컨테이너를 못 찾으면 다른 곳에 두지 않고 다음 DOM 변화 때 다시 시도함
+  function isButtonRow(element) {
+    const style = getComputedStyle(element);
+    if (!style.display.includes("flex") || style.flexDirection !== "row") return false;
+
+    const buttonItems = [...element.children].filter(
+      (child) => child.matches("button") || Boolean(child.querySelector("button"))
+    );
+
+    return buttonItems.length >= 2;
+  }
+
+  // 영역 안에서 버튼이 가로로 2개 이상 놓인 줄 중, 다른 줄을 품지 않는 가장 안쪽 줄의
+  // 첫 번째 (전송 버튼까지 포함한 바깥 줄은 왼쪽 툴바를 품고 있어 제외됨)
+  function findButtonRowIn(area) {
+    const rows = [area, ...area.querySelectorAll("div")].filter(isButtonRow);
+    return rows.find((row) => !rows.some((other) => other !== row && row.contains(other))) || null;
+  }
+
+  // Tailwind 클래스 대신 구조로 찾음: 입력 상자에서 편집기 영역 바로 뒤에 Crack의 하단
+  // 버튼 영역이 오고, 다른 스크립트가 붙인 요소는 그 뒤에 옴
+  function findComposerToolbar() {
+    const editor = findComposerEditor();
+    if (!editor) return null;
+
+    let section = editor;
+
+    for (let depth = 0; depth < 5 && section.parentElement; depth += 1) {
+      // 메시지 목록까지 올라가면 메시지의 버튼 줄을 잡을 수 있으므로 그만둠
+      if (section.parentElement.querySelector(GROUP_SELECTOR)) break;
+
+      for (let sibling = section.nextElementSibling; sibling; sibling = sibling.nextElementSibling) {
+        const toolbar = findButtonRowIn(sibling);
+        if (toolbar) return toolbar;
+      }
+
+      section = section.parentElement;
+    }
+
+    return null;
+  }
+
+  // 한 번 붙은 뒤에는 어디에 있든 옮기지 않음. React가 입력창을 새로 만들어
+  // 돋보기가 DOM에서 사라졌을 때만 다시 찾음
+  function isLauncherPlaced() {
+    return Boolean(launcherButton?.isConnected);
+  }
+
+  // 툴바 끝에 한 번 추가하고, 이후 순서는 건드리지 않음.
+  // 툴바를 못 찾으면 다른 곳에 두지 않고 다음 DOM 변화 때 다시 시도함
   function placeLauncher() {
     if (!launcherButton || launcherButton.hidden || isLauncherPlaced()) return;
 
-    const toolbar = document.querySelector(COMPOSER_TOOLBAR_SELECTOR);
+    const toolbar = findComposerToolbar();
     if (!toolbar) return;
 
     // 같은 버튼 요소를 옮겨 넣으므로 다시 그려져도 중복으로 생기지 않음
